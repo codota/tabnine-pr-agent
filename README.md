@@ -116,5 +116,8 @@ jobs:
 ```
 
 Note: You'll need to configure a few `secrets` in your repository settings:
-* COACHING_PAT
-* ACTION_ACCESS_PRIVATE_SSH_KEY (which should be obtained from the Tabnine organization)
+* COACHING_PAT (which should be obtained from the tabnine CLI)
+```shell
+tabnine auth status
+```
+* ACTION_ACCESS_PRIVATE_SSH_KEY (which should be obtained from us)
