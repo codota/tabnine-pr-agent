@@ -120,4 +120,4 @@ Note: You'll need to configure a few `secrets` in your repository settings:
 ```shell
 tabnine auth status
 ```
-* ACTION_ACCESS_PRIVATE_SSH_KEY (which should be obtained from us)
+* ACTION_ACCESS_PRIVATE_SSH_KEY (which should be obtained from Tabnine)
