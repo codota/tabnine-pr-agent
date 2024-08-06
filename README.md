@@ -71,3 +71,50 @@ jobs:
           pull_request_id: ${{ github.event.pull_request.number }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
 ```
+
+### Special case: inviting someone outside Tabnine organisation
+To invite an external user, you'll need to provide them with a couple of essential items:
+1. A specially created "Deploy key", which is a read-only SSH key. This can be individually created for each invitee or for a group of people, depending on your preference.
+2. An advanced workflow configuration, which you can directly copy and paste from below:
+
+```yaml
+name: "Review PR"
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  review_pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout the action repository
+        uses: actions/checkout@v4
+        with:
+          repository: codota/tabnine-pr-agent
+          ref: v1
+          path: ./.github/actions/tabnine-pr-agent
+          ssh-key: ${{ secrets.ACTION_ACCESS_PRIVATE_SSH_KEY }}
+
+      - name: Analyse PR
+        uses: ./.github/actions/tabnine-pr-agent
+        continue-on-error: true
+        with:
+          PAT: ${{ secrets.COACHING_PAT }}
+          ref: origin/${{ github.head_ref }}
+          path_to_repo: ${{ github.workspace }}
+          repository_owner: ${{ github.repository_owner }}
+          repository_name: ${{ github.event.repository.name }}
+          pull_request_id: ${{ github.event.pull_request.number }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+```
+
+Note: You'll need to configure a few `secrets` in your repository settings:
+* COACHING_PAT
+* ACTION_ACCESS_PRIVATE_SSH_KEY (which should be obtained from the Tabnine organization)
