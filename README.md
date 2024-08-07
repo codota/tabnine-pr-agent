@@ -22,6 +22,9 @@ with:
 
   # The source branch of the pull request
   ref: origin/${{ github.head_ref }}
+  
+  # The target branch (destination) of the pull request
+  base_ref: origin/${{ github.base_ref }}
 
   # Path to the repository in the workflow run, typically equal to "github.workspace"
   path_to_repo: ${{ github.workspace }}
@@ -43,7 +46,7 @@ with:
 Full workflow that is triggered on "pull_request":
 
 ```yaml
-name: "Review PR"
+name: "Tabnine PR review agent"
 
 on:
   pull_request:
@@ -59,65 +62,16 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Analyse PR
-        uses: codota/tabnine-pr-agent@main
+      - name: Review PR
+        uses: codota/tabnine-pr-agent@v1
         continue-on-error: true
         with:
           PAT: ${{ secrets.COACHING_PAT }}
           ref: origin/${{ github.head_ref }}
+          base_ref: origin/${{ github.base_ref }}
           path_to_repo: ${{ github.workspace }}
           repository_owner: ${{ github.repository_owner }}
           repository_name: ${{ github.event.repository.name }}
           pull_request_id: ${{ github.event.pull_request.number }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
 ```
-
-### Special case: inviting someone outside Tabnine organisation
-To invite an external user, you'll need to provide them with a couple of essential items:
-1. A specially created "Deploy key", which is a read-only SSH key. This can be individually created for each invitee or for a group of people, depending on your preference.
-2. An advanced workflow configuration, which you can directly copy and paste from below:
-
-```yaml
-name: "Review PR"
-
-on:
-  pull_request:
-    branches:
-      - main
-
-jobs:
-  review_pr:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout the repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Checkout the action repository
-        uses: actions/checkout@v4
-        with:
-          repository: codota/tabnine-pr-agent
-          ref: v1
-          path: ./.github/actions/tabnine-pr-agent
-          ssh-key: ${{ secrets.ACTION_ACCESS_PRIVATE_SSH_KEY }}
-
-      - name: Analyse PR
-        uses: ./.github/actions/tabnine-pr-agent
-        continue-on-error: true
-        with:
-          PAT: ${{ secrets.COACHING_PAT }}
-          ref: origin/${{ github.head_ref }}
-          path_to_repo: ${{ github.workspace }}
-          repository_owner: ${{ github.repository_owner }}
-          repository_name: ${{ github.event.repository.name }}
-          pull_request_id: ${{ github.event.pull_request.number }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-```
-
-Note: You'll need to configure a few `secrets` in your repository settings:
-* COACHING_PAT (which should be obtained from the tabnine CLI)
-```shell
-tabnine auth status
-```
-* ACTION_ACCESS_PRIVATE_SSH_KEY (which should be obtained from Tabnine)
