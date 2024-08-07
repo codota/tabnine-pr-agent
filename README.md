@@ -2,6 +2,15 @@
 
 This action analyzes a pull request using the TabNine CLI. It pulls the necessary Docker image, runs an analysis on the pull request, and checks the report in watch mode. This action helps in automating the code review process by leveraging TabNine's AI-powered code analysis capabilities.
 
+# Requirements:
+To use this action, you must first adjust your GITHUB_TOKEN permissions as follows:
+1. Navigate to your repository's settings.
+2. In the sidebar, locate and select "Actions" under the "General" section.
+3. Within the "Workflow Permissions" area, set the permissions to:
+
+* Enable `Read and write permissions`
+* Check the option `Allow GitHub Actions to create and approve pull requests`
+
 # Usage
 1. This action works only on the "pull_request" event within the workflow.
 ```yaml
