@@ -9,6 +9,10 @@ on:
   pull_request:
     branches:
       - main
+  
+permissions:
+  contents: read
+  pull-requests: write
 ```
 
 2. Ensure that repository is [checked out](https://github.com/actions/checkout/tree/v4#readme) within your workflow
@@ -52,6 +56,10 @@ on:
   pull_request:
     branches:
       - main
+        
+permissions:
+  contents: read
+  pull-requests: write
 
 jobs:
   review_pr:
