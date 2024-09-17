@@ -29,13 +29,27 @@ inputs:
 runs:
   using: 'composite'
   steps:
+
+    - name: Getting previous run state
+      uses: actions/download-artifact@master
+      continue-on-error: true
+      with:
+        name: storage
+        path: /etc/tabnine_cli/storage.json
     - name: Pull docker image
       run: docker pull ghcr.io/codota/tabnine-cli:latest
       shell: bash
 
     - name: Run analyse
-      run: docker run -e GITHUB_TOKEN=${{ inputs.github_token }} -e GITHUB_ACTION=__self --rm -v ./tabnine:/etc/tabnine_cli -v ${{inputs.path_to_repo}}:/opt/repository ghcr.io/codota/tabnine-cli:latest review diff -b ${{ inputs.base_ref }} -bf ${{ inputs.ref }} --token ${{inputs.PAT}} --workspace ${{ inputs.repository_owner }} --repo_slug ${{ inputs.repository_name }} --pr_id ${{ inputs.pull_request_id }} /opt/repository
+      run: docker run --rm -v ./tabnine:/etc/tabnine_cli -v ${{inputs.path_to_repo}}:/opt/repository ghcr.io/codota/tabnine-cli:latest review diff -b ${{ inputs.base_ref }} -bf ${{ inputs.ref }} --token ${{inputs.PAT}} --workspace ${{ inputs.repository_owner }} --repo_slug ${{ inputs.repository_name }} --pr_id ${{ inputs.pull_request_id }} /opt/repository
       shell: bash
+    
+    - name: Saving state
+      uses: actions/upload-artifact@master
+      continue-on-error: true
+      with:
+        name: storage
+        path: /etc/tabnine_cli/storage.json
 
     - name: Check report in watch mode
       run: docker run -e GITHUB_TOKEN=${{ inputs.github_token }} -e GITHUB_ACTION=__self --rm -v ./tabnine:/etc/tabnine_cli ghcr.io/codota/tabnine-cli:latest review report --format github --token ${{inputs.PAT}} --workspace ${{ inputs.repository_owner }} --repo_slug ${{ inputs.repository_name }} --pr_id ${{ inputs.pull_request_id }} --last --watch
