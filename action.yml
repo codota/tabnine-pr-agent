@@ -41,7 +41,7 @@ runs:
       shell: bash
 
     - name: Run analyse
-      run: docker run -e --rm -v ./tabnine:/etc/tabnine_cli -v ${{inputs.path_to_repo}}:/opt/repository ghcr.io/codota/tabnine-cli:latest review diff -b ${{ inputs.base_ref }} -bf ${{ inputs.ref }} --token ${{inputs.PAT}} --workspace ${{ inputs.repository_owner }} --repo_slug ${{ inputs.repository_name }} --pr_id ${{ inputs.pull_request_id }} /opt/repository
+      run: docker run --rm -v ./tabnine:/etc/tabnine_cli -v ${{inputs.path_to_repo}}:/opt/repository ghcr.io/codota/tabnine-cli:latest review diff -b ${{ inputs.base_ref }} -bf ${{ inputs.ref }} --token ${{inputs.PAT}} --workspace ${{ inputs.repository_owner }} --repo_slug ${{ inputs.repository_name }} --pr_id ${{ inputs.pull_request_id }} /opt/repository
       shell: bash
     
     - name: Saving state
