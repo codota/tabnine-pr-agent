@@ -32,6 +32,7 @@ runs:
 
     - name: Getting previous run state
       uses: actions/download-artifact@master
+      continue-on-error: true
       with:
         name: storage
         path: /etc/tabnine_cli/storage.json
@@ -45,6 +46,7 @@ runs:
     
     - name: Saving state
       uses: actions/upload-artifact@master
+      continue-on-error: true
       with:
         name: storage
         path: /etc/tabnine_cli/storage.json
