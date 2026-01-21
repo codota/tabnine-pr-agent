@@ -3,8 +3,8 @@ description: 'AI-powered code review using Tabnine CLI Agent'
 
 inputs:
   TABNINE_KEY:
-    required: true
-    description: 'Tabnine authentication credentials (JSON)'
+    required: false
+    description: 'Tabnine authentication credentials (JSON). Optional - falls back to TABNINE_KEY environment variable if not provided.'
   github_token:
     required: true
     description: 'GitHub token for authentication'
@@ -52,11 +52,13 @@ runs:
     - name: Configure Tabnine Auth & Settings
       shell: bash
       env:
-        TABNINE_KEY: ${{ inputs.TABNINE_KEY }}
+        TABNINE_KEY_INPUT: ${{ inputs.TABNINE_KEY }}
       run: |
-        # Validate TABNINE_KEY secret
+        # Use input if provided, otherwise fall back to TABNINE_KEY env var (org-level secret)
+        TABNINE_KEY="${TABNINE_KEY_INPUT:-$TABNINE_KEY}"
+
         if [ -z "$TABNINE_KEY" ]; then
-          echo "Error: Required authentication secret is not configured"
+          echo "Error: TABNINE_KEY not provided. Either pass it as input or set TABNINE_KEY environment variable."
           exit 1
         fi
 
