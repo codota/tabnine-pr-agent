@@ -86,15 +86,16 @@ runs:
     - name: Authenticate GitHub CLI
       shell: bash
       env:
-        GITHUB_TOKEN: ${{ inputs.github_token }}
+        GH_TOKEN_INPUT: ${{ inputs.github_token }}
       run: |
-        echo "$GITHUB_TOKEN" | gh auth login --with-token
+        # Use a different env var name to avoid conflict with GITHUB_TOKEN
+        echo "$GH_TOKEN_INPUT" | gh auth login --with-token
 
     - name: Code Review
       shell: bash
       run: |
         ~/.local/bin/tabnine -y -p "## 1. Persona & Context
-        You are a Senior Software Engineer performing a rigorous code review for the Tabnine CLI project (Rust/Node.js).
+        You are a Senior Software Engineer performing a rigorous code review.
         Your goal is to ensure the codebase remains high-quality, maintainable, and secure.
         ## 2. Environment & Tools
         You are running in a GitHub Actions CI environment with full access to the shell and the pre-authenticated 'gh' CLI.
@@ -115,7 +116,6 @@ runs:
         **Maintainability & Readability**: Are names self-explanatory? Is the code simple and modular? Are complex parts documented?
         **Security & Reliability**: Are inputs sanitized? Are secrets exposed? Does error handling fail safely?
         **Performance**: Are there unnecessary allocations or blocking operations?
-        **Project Specifics**: Cross-platform paths (Windows/Linux), backward compatibility with config files.
         ## 4. Comment Value Threshold (CRITICAL FILTER)
 
         Before posting ANY comment, it MUST pass ALL of these criteria:
