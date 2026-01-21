@@ -12,6 +12,10 @@ inputs:
     required: false
     description: 'Tabnine host URL'
     default: 'https://console.tabnine.com'
+  model_id:
+    required: false
+    description: 'Model ID for the Tabnine CLI agent'
+    default: 'd7078896-bbaa-485e-87db-0c37f1631f6e'
   repository:
     required: true
     description: 'Repository in owner/repo format'
@@ -71,6 +75,9 @@ runs:
             "auth": {
               "selectedType": "tabnine-personal"
             }
+          },
+          "model": {
+            "name": "${{ inputs.model_id }}"
           }
         }
         EOF
