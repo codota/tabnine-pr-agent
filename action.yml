@@ -114,9 +114,13 @@ runs:
         ### Phase A: Understanding the Change
         1. Execute 'gh pr view --json title,body,comments' to understand the intent.
         2. Execute 'gh pr diff' to examine the implementation.
-        ### Phase B: Check Existing Comments
-        1. Get existing comments: 'gh pr view --json comments'
-        2. If a previously reported issue appears fixed, reply with a resolved comment.
+        ### Phase B: Clean Up Previous Bot Comments
+        Before posting new comments, remove all previous comments from Tabnine PR Bot to avoid clutter and outdated feedback:
+        1. List all review comments: 'gh api /repos/${{ inputs.repository }}/pulls/${{ inputs.pull_request_number }}/comments'
+        2. For each comment that starts with '#### Tabnine PR Bot', delete it using: 'gh api --method DELETE /repos/${{ inputs.repository }}/pulls/${{ inputs.pull_request_number }}/comments/COMMENT_ID'
+        3. List all PR comments (issue comments): 'gh api /repos/${{ inputs.repository }}/issues/${{ inputs.pull_request_number }}/comments'
+        4. For each comment that starts with '#### Tabnine PR Bot', delete it using: 'gh api --method DELETE /repos/${{ inputs.repository }}/issues/${{ inputs.pull_request_number }}/comments/COMMENT_ID'
+        This ensures each review run provides fresh, up-to-date feedback without accumulating stale comments.
         ### Phase C: Engineering Audit
         Evaluate the code against these Software Engineering pillars:
         **Correctness & Logic**: Does the code solve the problem? Are there edge cases, off-by-one errors, or race conditions?
@@ -150,13 +154,13 @@ runs:
            - No duplicate feedback exists on nearby lines
         3. Only then submit the comment
         Submit inline comments using:
-        **IMPORTANT**: All comments MUST start with '#### Tabnine' on the first line, followed by a blank line, then your comment content.
+        **IMPORTANT**: All comments MUST start with '#### Tabnine PR Bot' on the first line, followed by a blank line, then your comment content.
         For SINGLE-LINE comments:
-        gh api --method POST -H 'Accept: application/vnd.github+json' /repos/${{ inputs.repository }}/pulls/${{ inputs.pull_request_number }}/comments -f body='#### Tabnine
+        gh api --method POST -H 'Accept: application/vnd.github+json' /repos/${{ inputs.repository }}/pulls/${{ inputs.pull_request_number }}/comments -f body='#### Tabnine PR Bot
 
         YOUR_COMMENT' -f commit_id='${{ inputs.head_sha }}' -f path='FILE_PATH' -F line=LINE_NUMBER -f side='RIGHT'
         For MULTI-LINE comments:
-        gh api --method POST -H 'Accept: application/vnd.github+json' /repos/${{ inputs.repository }}/pulls/${{ inputs.pull_request_number }}/comments -f body='#### Tabnine
+        gh api --method POST -H 'Accept: application/vnd.github+json' /repos/${{ inputs.repository }}/pulls/${{ inputs.pull_request_number }}/comments -f body='#### Tabnine PR Bot
 
         YOUR_COMMENT' -f commit_id='${{ inputs.head_sha }}' -f path='FILE_PATH' -F start_line=START_LINE_NUMBER -f start_side='RIGHT' -F line=END_LINE_NUMBER -f side='RIGHT'
         **Code Suggestions**: Use GitHub's suggestion syntax ONLY when the fix is clear, unambiguous, and replaces 10 or fewer lines:
@@ -166,11 +170,11 @@ runs:
         For larger changes or context-dependent fixes, provide guidance as a regular comment without the suggestion block.
         ### Phase E: Final Summary
         After submitting inline comments (or if zero comments were posted), post a holistic summary:
-        gh pr review --comment -b '#### Tabnine
+        gh pr review --comment -b '#### Tabnine PR Bot
 
         YOUR_SUMMARY'
         Your summary must:
-        - Start with the '#### Tabnine' header (already included in the command above)
+        - Start with the '#### Tabnine PR Bot' header (already included in the command above)
         - Acknowledge what the PR accomplishes
         - Note any critical issues found (or state 'No critical issues identified')
         - Be concise
