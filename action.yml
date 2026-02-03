@@ -15,7 +15,7 @@ inputs:
   model_id:
     required: false
     description: 'Model ID for the Tabnine CLI agent'
-    default: 'd7078896-bbaa-485e-87db-0c37f1631f6e'
+    default: 'c5ff943b-972a-45e7-9242-a3367c907074'
   repository:
     required: true
     description: 'Repository in owner/repo format'
