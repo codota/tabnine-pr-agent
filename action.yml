@@ -137,10 +137,24 @@ runs:
         3. **Search for cross-repo consumers**: For each significant function, class, or API endpoint modified in the diff, call 'remote_codebase_search' to find code in OTHER repositories that imports or calls those interfaces. Include the local repo URL in 'denyListRepos' to exclude self-references.
         4. **Inspect symbol usages**: For key changed symbols, call 'remote_symbol_content' to retrieve full source of cross-repo consumers and assess whether the PR changes would break them.
         5. **Check architecture constraints**: Call 'remote_get_asset' with assetType 'SERVICE_SUMMARY' for the affected service(s) to understand the intended architecture and verify this PR does not introduce unwanted inter-service dependencies.
-        6. **Compile findings** for inclusion in the Phase E summary comment:
+        6. **Derive multi-repository architecture context**:
+           - Use 'remote_get_asset' to retrieve SERVICE_SUMMARY and OPENAPI_SPEC assets across relevant repositories.
+           - Infer service-to-service and repository-level dependencies based on:
+            - Declared dependencies in SERVICE_SUMMARY assets
+            - API consumers inferred from OPENAPI_SPEC usage and cross-repo code references
+          - Build a mental model of the system architecture spanning multiple repositories.
+        7. **Architecture visualization (when helpful)**:
+           - If the PR impacts shared services, public APIs, or cross-repo contracts, generate a concise ASCII diagram representing:
+           - Services or repositories as nodes
+            - Call or dependency relationships as directed edges
+            - Use this diagram to reason about blast radius, layering violations, or unintended coupling.
+        8. **Compile findings** for inclusion in the Phase E summary comment:
            - Architecture violations or new inter-service dependencies introduced by this PR
-           - Other repositories or services that consume the changed code and may be impacted (with file and line references where possible)
+           - Other repositories or services that consume the changed code (with file and line references where possible)
+           - High-level architecture insight derived from SERVICE_SUMMARY / OPENAPI_SPEC assets
+           - ASCII architecture diagram (only if it adds clarity; omit if trivial)
            - If no cross-repo impact is found, state 'No cross-repository impact detected'
+
         ## 4. Comment Value Threshold (CRITICAL FILTER)
 
         Before posting ANY comment, it MUST pass ALL of these criteria:
