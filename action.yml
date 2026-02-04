@@ -98,6 +98,24 @@ runs:
         # Use a different env var name to avoid conflict with GITHUB_TOKEN
         echo "$GH_TOKEN_INPUT" | gh auth login --with-token
 
+    - name: Clean Up Previous Bot Summary Comments
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+      run: |
+        echo "Cleaning up previous Tabnine PR Bot summary comments..."
+
+        # Get all issue comments on the PR
+        COMMENTS=$(gh api "/repos/${{ inputs.repository }}/issues/${{ inputs.pull_request_number }}/comments" --jq '.[] | select(.body | startswith("#### Tabnine PR Bot")) | .id')
+
+        # Delete all bot summary comments to prevent duplicates
+        for COMMENT_ID in $COMMENTS; do
+          echo "Deleting bot summary comment: $COMMENT_ID"
+          gh api --method DELETE "/repos/${{ inputs.repository }}/issues/${{ inputs.pull_request_number }}/comments/$COMMENT_ID" || true
+        done
+
+        echo "Cleanup complete."
+
     - name: Code Review
       shell: bash
       run: |
@@ -114,16 +132,11 @@ runs:
         ### Phase A: Understanding the Change
         1. Execute 'gh pr view --json title,body,comments' to understand the intent.
         2. Execute 'gh pr diff' to examine the implementation.
-        ### Phase B: Clean Up Previous Bot Comments
-        Before posting new comments, clean up previous Tabnine PR Bot feedback:
-        **Inline review comments** — delete all previous ones:
+        ### Phase B: Clean Up Previous Inline Comments
+        Before posting new inline comments, delete all previous Tabnine PR Bot inline review comments:
         1. List all review comments: 'gh api /repos/${{ inputs.repository }}/pulls/${{ inputs.pull_request_number }}/comments'
         2. For each comment whose body starts with '#### Tabnine PR Bot', delete it using: 'gh api --method DELETE /repos/${{ inputs.repository }}/pulls/${{ inputs.pull_request_number }}/comments/COMMENT_ID'
-        **Summary comment (issue comment)** — find and save its ID for later update:
-        1. List all PR issue comments: 'gh api /repos/${{ inputs.repository }}/issues/${{ inputs.pull_request_number }}/comments'
-        2. Find the comment whose body starts with '#### Tabnine PR Bot'. If found, save its COMMENT_ID as EXISTING_SUMMARY_COMMENT_ID for use in Phase E.
-        3. If multiple such comments exist, delete all except the earliest one and use that earliest one's ID as EXISTING_SUMMARY_COMMENT_ID.
-        This ensures each review run provides fresh inline feedback and updates the summary comment in-place rather than creating duplicates.
+        Note: Summary comments are cleaned up automatically before this review runs, so you only need to handle inline comments here.
         ### Phase C: Engineering Audit
         Evaluate the code against these Software Engineering pillars:
         **Correctness & Logic**: Does the code solve the problem? Are there edge cases, off-by-one errors, or race conditions?
@@ -183,12 +196,8 @@ runs:
         \`\`\`
         For larger changes or context-dependent fixes, provide guidance as a regular comment without the suggestion block.
         ### Phase E: Final Summary
-        After submitting inline comments (or if zero comments were posted), post or update the holistic summary.
-        **If EXISTING_SUMMARY_COMMENT_ID was found in Phase B**, update the existing comment:
-        gh api --method PATCH /repos/${{ inputs.repository }}/issues/${{ inputs.pull_request_number }}/comments/EXISTING_SUMMARY_COMMENT_ID -f body='#### Tabnine PR Bot
-
-        YOUR_SUMMARY'
-        **Otherwise**, create a new comment:
+        After submitting inline comments (or if zero comments were posted), post the holistic summary.
+        Create the summary comment using:
         gh api --method POST /repos/${{ inputs.repository }}/issues/${{ inputs.pull_request_number }}/comments -f body='#### Tabnine PR Bot
 
         YOUR_SUMMARY'
