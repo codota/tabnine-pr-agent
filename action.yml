@@ -357,8 +357,14 @@ runs:
         - **[Warning]** -- Logic issues, edge cases, performance concerns. Strongly recommended to fix.
         - **[Suggestion]** -- Improvements to maintainability or clarity. Author's discretion.
 
+        **FILE-LEVEL vs LINE-LEVEL comments**: If a comment applies to the entire file rather than specific lines (e.g., a deleted file, a file that should not exist, or a concern about the file as a whole), post a FILE-LEVEL comment using 'subject_type=file' instead of a multi-line comment spanning all lines. Never post a multi-line comment that covers all or most lines of a file -- this creates an excessively large comment. Use file-level comments for file-wide feedback.
+
         Submit inline comments using:
         **IMPORTANT**: All comments MUST start with '#### Tabnine PR Bot' on the first line, followed by a blank line, then your formatted comment content.
+        For FILE-LEVEL comments (when the comment applies to the entire file, not specific lines):
+        gh api --method POST -H 'Accept: application/vnd.github+json' /repos/${{ inputs.repository }}/pulls/${{ inputs.pull_request_number }}/comments -f body='#### Tabnine PR Bot
+
+        YOUR_COMMENT' -f commit_id='${{ inputs.head_sha }}' -f path='FILE_PATH' -f subject_type='file'
         For SINGLE-LINE comments:
         gh api --method POST -H 'Accept: application/vnd.github+json' /repos/${{ inputs.repository }}/pulls/${{ inputs.pull_request_number }}/comments -f body='#### Tabnine PR Bot
 
