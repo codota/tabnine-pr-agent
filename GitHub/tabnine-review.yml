@@ -127,6 +127,15 @@ jobs:
             gh api --method DELETE "/repos/${{ github.repository }}/issues/comments/$COMMENT_ID" || true
           done
 
+          # Get all pull-request comments on the PR
+          PR_COMMENTS=$(gh api "/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/comments" --jq '.[] | select(.body | startswith("#### Tabnine PR Bot")) | .id')
+
+          # Delete all bot pull request review comments to prevent duplicates
+          for COMMENT_ID in $PR_COMMENTS; do
+            echo "Deleting bot summary comment: $COMMENT_ID"
+            gh api --method DELETE "/repos/${{ github.repository }}/issues/comments/$COMMENT_ID" || true
+          done
+
           echo "Cleanup complete."
 
       - name: Code Review
