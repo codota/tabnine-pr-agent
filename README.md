@@ -37,7 +37,7 @@ permissions:
 
 ```yaml
 - name: Review PR
-  uses: codota/tabnine-pr-agent@v1
+  uses: codota/tabnine-pr-agent@v2
   continue-on-error: true
   with:
     # Tabnine authentication token — required
@@ -102,7 +102,7 @@ jobs:
           fetch-depth: 0
 
       - name: Review PR
-        uses: codota/tabnine-pr-agent@v1
+        uses: codota/tabnine-pr-agent@v2
         continue-on-error: true
         with:
           TABNINE_KEY: ${{ secrets.TABNINE_KEY }}
