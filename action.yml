@@ -130,7 +130,6 @@ runs:
       shell: bash
       env:
         GH_TOKEN_INPUT: ${{ inputs.github_token }}
-        TABNINE_CLI_TRUST_WORKSPACE: "true"
       run: |
         # Use a different env var name to avoid conflict with GITHUB_TOKEN
         echo "$GH_TOKEN_INPUT" | gh auth login --with-token
@@ -169,6 +168,7 @@ runs:
       env:
         TABNINE_TOKEN: ${{ inputs.TABNINE_KEY }}
         PROMPT_OVERRIDE: ${{ inputs.prompt_override }}
+        TABNINE_CLI_TRUST_WORKSPACE: "true"
       run: |
         if [ -z "$TABNINE_TOKEN" ]; then
           echo "Error: TABNINE_KEY is required"
