@@ -143,6 +143,16 @@ jobs:
           base_sha: ${{ github.event.pull_request.base.sha }}
 ```
 
+### Summary comment failsafe
+
+The built-in review asks the agent to post its holistic summary by running the
+`gh` CLI. If the underlying model emits the summary as plain text without
+running that command, the action recovers the summary from the agent's captured
+output and posts it itself (a `::warning::` is emitted if it cannot be
+recovered). This step is idempotent — when the agent posts the summary
+correctly, it does nothing. The failsafe does not apply when `prompt_override`
+is set, since a custom prompt has no defined summary contract.
+
 ---
 
 # GitLab CI Setup

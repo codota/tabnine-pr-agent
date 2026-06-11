@@ -169,6 +169,7 @@ runs:
         TABNINE_TOKEN: ${{ inputs.TABNINE_KEY }}
         PROMPT_OVERRIDE: ${{ inputs.prompt_override }}
         TABNINE_CLI_TRUST_WORKSPACE: "true"
+        AGENT_OUTPUT_FILE: ${{ runner.temp }}/tabnine-agent-output.txt
       run: |
         if [ -z "$TABNINE_TOKEN" ]; then
           echo "Error: TABNINE_KEY is required"
@@ -413,6 +414,8 @@ runs:
 
         YOUR_SUMMARY'
 
+        **CRITICAL — failsafe**: Posting the summary via the 'gh api' command above is mandatory; it is the only thing that reaches the PR. Do NOT treat printing the summary as the assistant's final message as a substitute for running the command. After you have run the command, ALSO print the exact same summary text to stdout, on its own lines, wrapped between the literal markers <<<TABNINE_SUMMARY_START>>> and <<<TABNINE_SUMMARY_END>>>. The workflow uses these markers to recover and post the summary if the command above did not run, so they must surround the full summary (including the '${{ inputs.comment_prefix }}' header line).
+
         Structure your summary as follows:
         - **Line 1 - Risk Tier**: State the tier: [Low Risk], [Standard], or [HIGH RISK]
         - **What This PR Does** (1-2 sentences): Demonstrate you understood the author's intent. This builds trust.
@@ -452,7 +455,74 @@ runs:
         - 'Obviously...' / 'Clearly...' / 'Simply...' (condescending)
         - Restating what the code does without adding insight
 
-        **Comment Density Rule**: If you are about to post more than the tier's budget, re-evaluate all comments and keep only the most impactful. Developers ignore reviews with too many comments."
+        **Comment Density Rule**: If you are about to post more than the tier's budget, re-evaluate all comments and keep only the most impactful. Developers ignore reviews with too many comments." | tee "$AGENT_OUTPUT_FILE"
+
+    - name: Ensure summary comment posted
+      # The agent is instructed (Phase D) to POST its summary by running 'gh api'.
+      # When the underlying model emits the summary as plain text instead of
+      # executing that command, nothing reaches the PR and the agent step still
+      # exits 0 -- a silent no-review. This step is a deterministic safety net:
+      # if no summary comment exists after the agent run, it recovers the summary
+      # from the captured agent output and posts it. It is idempotent -- when the
+      # agent posted correctly it finds the existing comment and does nothing.
+      # Scoped to the built-in review (prompt_override has no summary contract).
+      if: always() && inputs.prompt_override == ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        COMMENT_PREFIX: ${{ inputs.comment_prefix }}
+        AGENT_OUTPUT_FILE: ${{ runner.temp }}/tabnine-agent-output.txt
+      run: |
+        # If a summary (issue) comment with the prefix already exists, the agent
+        # posted it -- nothing to do. Inline review comments live on a different
+        # endpoint (pulls/comments), so they never satisfy this check.
+        existing=$(gh api "/repos/${{ inputs.repository }}/issues/${{ inputs.pull_request_number }}/comments" \
+          --jq "[.[] | select(.body | startswith(env.COMMENT_PREFIX))] | length" 2>/dev/null || echo 0)
+
+        if [ "${existing:-0}" -gt 0 ]; then
+          echo "Summary comment already posted by the agent; nothing to do."
+          exit 0
+        fi
+
+        if [ ! -s "$AGENT_OUTPUT_FILE" ]; then
+          echo "::warning::Tabnine agent posted no summary comment and no agent output was captured; skipping fallback."
+          exit 0
+        fi
+
+        # Strip ANSI escape sequences the CLI emits for its TUI, then recover the
+        # summary. Preferred: the explicit <<<TABNINE_SUMMARY_*>>> markers the
+        # agent is told to print. Fallback: from the last line that begins with
+        # the comment prefix through the first '</details>' (the metadata block
+        # closes the summary), or to EOF. The Phase D summary is always the last
+        # prefixed block, since inline comments are posted earlier.
+        clean=$(sed -E 's/\x1b\[[0-9;]*[a-zA-Z]//g' "$AGENT_OUTPUT_FILE")
+
+        summary=$(printf '%s\n' "$clean" | awk '
+          /<<<TABNINE_SUMMARY_START>>>/ { cap=1; buf=""; next }
+          /<<<TABNINE_SUMMARY_END>>>/   { if (cap) { printf "%s", buf; cap=0 } next }
+          cap { buf = buf $0 "\n" }
+        ')
+
+        if [ -z "${summary//[$' \t\r\n']/}" ]; then
+          summary=$(printf '%s\n' "$clean" | awk -v p="$COMMENT_PREFIX" '
+            index($0, p) == 1 { start = NR }
+            { lines[NR] = $0 }
+            END {
+              if (!start) exit
+              end = NR
+              for (i = start; i <= NR; i++) if (lines[i] ~ /<\/details>/) { end = i; break }
+              for (i = start; i <= end; i++) print lines[i]
+            }
+          ')
+        fi
+
+        if [ -z "${summary//[$' \t\r\n']/}" ]; then
+          echo "::warning::Tabnine agent did not post a summary comment and none could be recovered from its output."
+          exit 0
+        fi
+
+        echo "Tabnine agent did not post its summary; posting the recovered summary as a fallback."
+        gh api --method POST "/repos/${{ inputs.repository }}/issues/${{ inputs.pull_request_number }}/comments" -f body="$summary"
 
     - name: Cleanup Tabnine Settings
       if: always() && inputs.cleanup == 'true'
