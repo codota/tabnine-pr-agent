@@ -12,17 +12,17 @@ Set the following repository secret in **Settings > Secrets and variables > Acti
 
 | Secret / Variable | Required | Description |
 |---|---|---|
-| `TABNINE_KEY` | Yes | Tabnine Personal Access Token. Store as a **repository secret**. |
+| `TABNINE_KEY` | Yes | Tabnine Personal Access Token. It is exposed to OpenCode only for the agent run and stored in runner-temporary auth data. |
 
 The action also requires a `github_token` input — typically provided via the built-in `secrets.GITHUB_TOKEN`.
 
-Optionally, set the following repository variables in **Settings > Secrets and variables > Actions > Variables**:
+Set `TABNINE_MODEL_ID`, and optionally the other repository variables, in **Settings > Secrets and variables > Actions > Variables**:
 
 | Variable | Required | Description |
 |---|---|---|
 | `TABNINE_HOST` | No | Tabnine host URL for self-hosted / EMT installations (default: `https://console.tabnine.com`) |
-| `TABNINE_MODEL_ID` | No | Model ID for the Tabnine CLI agent. If empty, falls back to `DEFAULT_MODEL_ID` in the workflow yml or the system default from the admin console. |
-| `TABNINE_CLEANUP` | No | Set to `"true"` to delete `settings.json` after each run. Recommended for self-hosted runners. |
+| `TABNINE_MODEL_ID` | Yes | Tabnine model slug, either bare (for example `claude-sonnet-4-5`) or prefixed with `tabnine/`. |
+| `TABNINE_CLEANUP` | No | Set to `"true"` to uninstall action-managed Tabnine OpenCode files after each run. Recommended for self-hosted runners. Temporary auth data is always removed. |
 | `TABNINE_COMMENT_PREFIX` | No | Prefix used to identify bot comments for cleanup (default: `#### Tabnine PR Bot`). |
 | `TABNINE_FETCH_DEPTH` | No | Clone depth for `actions/checkout`. Default `"1"` (shallow) is sufficient — the built-in review uses the `gh` API and does not need local git history. Set to `"0"` for full history only if your `prompt_override` inspects local git history (e.g. `git log`, `git blame`). |
 
@@ -53,6 +53,9 @@ permissions:
     # Tabnine authentication token — required
     TABNINE_KEY: ${{ secrets.TABNINE_KEY }}
 
+    # Tabnine model slug — required
+    model_id: ${{ vars.TABNINE_MODEL_ID }}
+
     # GitHub token for authentication — required
     github_token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -71,9 +74,6 @@ permissions:
     # Tabnine host URL (optional, default: https://console.tabnine.com)
     # tabnine_host: "https://console.tabnine.com"
 
-    # Model ID for the Tabnine CLI agent (optional, overrides DEFAULT_MODEL_ID in action.yml)
-    # model_id: "your-model-id"
-
     # Custom prompt to replace the default code review (optional)
     # prompt_override: "Your custom prompt here"
 
@@ -84,7 +84,8 @@ permissions:
     # Use a unique value per action invocation to avoid cross-cleanup.
     # comment_prefix: "#### Tabnine PR Bot"
 
-    # Set to "true" to delete settings.json after each run (optional, default: "false")
+    # Set to "true" to uninstall action-managed OpenCode files after each run
+    # (optional, default: "false"; temporary auth data is always removed)
     # Recommended for self-hosted runners.
     # cleanup: "true"
 ```
@@ -94,17 +95,17 @@ permissions:
 | Input | Required | Default | Description |
 |---|---|---|---|
 | `TABNINE_KEY` | Yes | — | Tabnine Personal Access Token |
+| `model_id` | Yes | — | Tabnine model slug, either bare or prefixed with `tabnine/` |
 | `github_token` | Yes | — | GitHub token for authentication (typically `secrets.GITHUB_TOKEN`) |
 | `repository` | Yes | — | Repository in `owner/repo` format |
 | `pull_request_number` | Yes | — | Pull request number |
 | `head_sha` | Yes | — | PR head commit SHA |
 | `base_sha` | Yes | — | PR base commit SHA |
 | `tabnine_host` | No | `https://console.tabnine.com` | Tabnine host URL (for self-hosted / EMT installations) |
-| `model_id` | No | — | Model ID for the Tabnine CLI agent. If omitted, falls back to `DEFAULT_MODEL_ID` in `action.yml` or the system default from the admin console. |
 | `prompt_override` | No | — | Custom prompt to replace the default code review prompt. When provided, the agent runs your prompt instead of the built-in review. |
 | `step_name` | No | `Tabnine Agent` | Display name for the agent step. |
 | `comment_prefix` | No | `#### Tabnine PR Bot` | Prefix used to identify bot comments for cleanup. Use a unique value per action invocation to avoid cross-cleanup. |
-| `cleanup` | No | `false` | Set to `"true"` to delete `settings.json` after each run. Recommended for self-hosted runners. |
+| `cleanup` | No | `false` | Set to `"true"` to uninstall action-managed Tabnine OpenCode files after each run. Temporary auth data is always removed. |
 
 ## Full Workflow Example
 
@@ -136,12 +137,22 @@ jobs:
         continue-on-error: true
         with:
           TABNINE_KEY: ${{ secrets.TABNINE_KEY }}
+          model_id: ${{ vars.TABNINE_MODEL_ID }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
           pull_request_number: ${{ github.event.pull_request.number }}
           head_sha: ${{ github.event.pull_request.head.sha }}
           base_sha: ${{ github.event.pull_request.base.sha }}
 ```
+
+The action installs the latest Tabnine OpenCode bundle for the runner's platform
+from `$TABNINE_HOST/update/opencode/`, skips interactive login, and runs:
+`tabnine run --model tabnine/<model-slug> --auto <prompt>`. A bare `model_id`
+is automatically prefixed with `tabnine/`; other provider prefixes are rejected.
+
+It downloads the `.run` bundle directly instead of using the
+`install.sh` one-liner, because that helper reopens `/dev/tty` to prompt and
+therefore fails on a runner with no controlling terminal.
 
 ### Summary comment failsafe
 

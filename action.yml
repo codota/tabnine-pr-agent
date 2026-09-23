@@ -1,12 +1,13 @@
 # Tabnine PR Agent for GitHub
 #
-# This composite action runs a Tabnine CLI Agent task on pull requests.
+# This composite action runs a Tabnine OpenCode task on pull requests.
 # By default it performs an AI-powered code review, but the prompt can be
 # overridden to run any custom task (e.g., enforcing conventions, generating
 # summaries, or checking documentation).
 #
 # Required Inputs:
-#   TABNINE_KEY          - Tabnine authentication credentials (JSON). Store as a repository secret.
+#   TABNINE_KEY          - Tabnine Personal Access Token. Store as a repository secret.
+#   model_id             - Tabnine model slug, either bare or prefixed with "tabnine/".
 #   github_token         - GitHub token for authentication (typically ${{ secrets.GITHUB_TOKEN }}).
 #   repository           - Repository in owner/repo format.
 #   pull_request_number  - Pull request number.
@@ -15,11 +16,10 @@
 #
 # Optional Inputs:
 #   tabnine_host         - Tabnine host URL (default: https://console.tabnine.com)
-#   model_id             - Model ID for the Tabnine CLI agent. If omitted, falls back to DEFAULT_MODEL_ID below or the system default from the admin console.
 #   prompt_override      - Custom prompt to replace the default code review prompt. When set, the agent runs your prompt instead.
 #   step_name            - Display name for the agent step (default: 'Tabnine Agent').
 #   comment_prefix       - Prefix used to identify bot comments for cleanup (default: '#### Tabnine PR Bot'). Each action invocation should use a unique prefix to avoid interfering with other invocations.
-#   cleanup              - Set to "true" to delete settings.json after each run (default: "false"). Recommended for self-hosted runners.
+#   cleanup              - Set to "true" to uninstall action-managed OpenCode files after each run (default: "false"). Recommended for self-hosted runners.
 
 name: 'Tabnine PR Agent'
 description: "Run Tabnine's AI agent on your pull requests: inline feedback, cross-repo impact analysis, and customizable prompts"
@@ -27,7 +27,7 @@ description: "Run Tabnine's AI agent on your pull requests: inline feedback, cro
 inputs:
   TABNINE_KEY:
     required: true
-    description: 'Tabnine authentication credentials (JSON)'
+    description: 'Tabnine Personal Access Token'
   github_token:
     required: true
     description: 'GitHub token for authentication'
@@ -36,12 +36,11 @@ inputs:
     description: 'Tabnine host URL'
     default: 'https://console.tabnine.com'
   model_id:
-    required: false
-    description: 'Model ID for the Tabnine CLI agent. If omitted, falls back to DEFAULT_MODEL_ID below or the system default.'
-    default: ''
+    required: true
+    description: 'Tabnine model slug, either bare (for example claude-sonnet-4-5) or prefixed with tabnine/.'
   cleanup:
     required: false
-    description: 'Set to "true" to delete settings.json after each run. Recommended for self-hosted runners.'
+    description: 'Set to "true" to uninstall the action-managed Tabnine OpenCode files after each run. Recommended for self-hosted runners.'
     default: 'false'
   repository:
     required: true
@@ -71,68 +70,63 @@ inputs:
 runs:
   using: 'composite'
   steps:
-    - name: Install Tabnine CLI
+    - name: Install Tabnine OpenCode
       shell: bash
+      env:
+        TABNINE_HOST: ${{ inputs.tabnine_host }}
       run: |
-        export TABNINE_HOST="${{ inputs.tabnine_host }}"
+        set -euo pipefail
 
-        # Download installer first, verify, then execute
-        curl -fsSL "$TABNINE_HOST/update/cli/installer.mjs" -o installer.mjs
-        node installer.mjs "$TABNINE_HOST"
+        # Resolve and run the platform bundle directly rather than the
+        # install.sh one-liner: that helper reopens /dev/tty to prompt, which
+        # fails on a runner with no controlling terminal. Authentication is
+        # supplied only to the run step.
+        HOST="${TABNINE_HOST%/}"
+
+        case "$(uname -s)" in
+          Linux) OS=linux ;;
+          Darwin) OS=darwin ;;
+          *) echo "Error: unsupported OS $(uname -s)" >&2; exit 1 ;;
+        esac
+
+        # uname -m describes the process, not the machine: under Rosetta it
+        # reports x86_64 on Apple Silicon.
+        if [ "$OS" = darwin ] && [ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" = 1 ]; then
+          ARCH=arm64
+        else
+          case "$(uname -m)" in
+            x86_64|amd64) ARCH=x64 ;;
+            arm64|aarch64) ARCH=arm64 ;;
+            *) echo "Error: unsupported architecture $(uname -m)" >&2; exit 1 ;;
+          esac
+        fi
+
+        VERSION="$(curl -fsSL "$HOST/update/opencode/version" | tr -d '\r\n\t ')"
+        case "$VERSION" in
+          ""|*[!A-Za-z0-9._-]*)
+            echo "Error: invalid version from $HOST/update/opencode/version: $VERSION" >&2
+            exit 1
+            ;;
+        esac
+
+        BUNDLE="$(mktemp "${TMPDIR:-/tmp}/tabnine-opencode.XXXXXX")"
+        trap 'rm -f "$BUNDLE"' EXIT
+        curl -fsSL -o "$BUNDLE" \
+          "$HOST/update/opencode/$VERSION/tabnine-opencode-$VERSION-$OS-$ARCH.run"
+        sh "$BUNDLE" -- --no-login --force --no-modify-path
 
         # Verify installation succeeded
-        if [ ! -f ~/.local/bin/tabnine ]; then
-          echo "Error: Tabnine CLI installation failed"
+        if [ ! -x ~/.local/bin/tabnine ]; then
+          echo "Error: Tabnine OpenCode installation failed"
           exit 1
         fi
+        ~/.local/bin/tabnine --version
 
     - name: Configure git
       shell: bash
       run: |
         git config user.name "Tabnine CLI Agent"
         git config user.email "TabnineCLI@tabnine.com"
-
-    - name: Configure Tabnine Auth & Settings
-      shell: bash
-      run: |
-        # Set a default model ID here, or leave empty to use the system default from the admin console.
-        DEFAULT_MODEL_ID=""
-
-        mkdir -p ~/.tabnine/agent
-
-        # Resolve model ID: input overrides the default
-        RESOLVED_MODEL_ID="${{ inputs.model_id }}"
-        RESOLVED_MODEL_ID="${RESOLVED_MODEL_ID:-$DEFAULT_MODEL_ID}"
-
-        # Build optional model block
-        MODEL_BLOCK=""
-        if [ -n "$RESOLVED_MODEL_ID" ]; then
-          MODEL_BLOCK=",\"model\":{\"name\":\"$RESOLVED_MODEL_ID\"}"
-        fi
-
-        # Write Settings
-        cat << EOF > ~/.tabnine/agent/settings.json
-        {
-          "general": {
-            "tabnineHost": "${{ inputs.tabnine_host }}"
-          },
-          "security": {
-            "auth": {
-              "selectedType": "tabnine-personal"
-            }
-          }${MODEL_BLOCK}
-        }
-        EOF
-
-        chmod 600 ~/.tabnine/agent/settings.json
-
-    - name: Authenticate GitHub CLI
-      shell: bash
-      env:
-        GH_TOKEN_INPUT: ${{ inputs.github_token }}
-      run: |
-        # Use a different env var name to avoid conflict with GITHUB_TOKEN
-        echo "$GH_TOKEN_INPUT" | gh auth login --with-token
 
     - name: Clean Up Previous Bot Comments
       shell: bash
@@ -167,21 +161,33 @@ runs:
       shell: bash
       env:
         TABNINE_TOKEN: ${{ inputs.TABNINE_KEY }}
+        TABNINE_HOST: ${{ inputs.tabnine_host }}
+        MODEL_ID: ${{ inputs.model_id }}
+        GH_TOKEN: ${{ inputs.github_token }}
         PROMPT_OVERRIDE: ${{ inputs.prompt_override }}
-        TABNINE_CLI_TRUST_WORKSPACE: "true"
+        XDG_DATA_HOME: ${{ runner.temp }}/tabnine-pr-agent-opencode-data
         AGENT_OUTPUT_FILE: ${{ runner.temp }}/tabnine-agent-output.txt
       run: |
+        set -euo pipefail
+
         if [ -z "$TABNINE_TOKEN" ]; then
           echo "Error: TABNINE_KEY is required"
           exit 1
         fi
 
+        case "$MODEL_ID" in
+          tabnine/?*) MODEL="$MODEL_ID" ;;
+          */*) echo "Error: model_id must be a Tabnine model (bare slug or tabnine/<slug>)" >&2; exit 1 ;;
+          ?*) MODEL="tabnine/$MODEL_ID" ;;
+          *) echo "Error: model_id is required" >&2; exit 1 ;;
+        esac
+
         if [ -n "$PROMPT_OVERRIDE" ]; then
-          ~/.local/bin/tabnine -y -p "$PROMPT_OVERRIDE"
-          exit $?
+          ~/.local/bin/tabnine run --model "$MODEL" --auto "$PROMPT_OVERRIDE"
+          exit 0
         fi
       
-        ~/.local/bin/tabnine -y -p "## 1. Persona & Context
+        ~/.local/bin/tabnine run --model "$MODEL" --auto "## 1. Persona & Context
         You are a collaborative Staff Engineer acting as a second pair of eyes on a teammate's PR.
         Your primary goal is to catch issues that genuinely matter -- bugs, security risks, data integrity problems, and production readiness gaps -- while respecting the author's expertise and intent.
         You are NOT a gatekeeper. You are a safety net. The author has thought about this code more than you have. Your job is to add value, not demonstrate thoroughness.
@@ -524,13 +530,25 @@ runs:
         echo "Tabnine agent did not post its summary; posting the recovered summary as a fallback."
         gh api --method POST "/repos/${{ inputs.repository }}/issues/${{ inputs.pull_request_number }}/comments" -f body="$summary"
 
-    - name: Cleanup Tabnine Settings
+    - name: Cleanup temporary OpenCode data
+      if: always()
+      shell: bash
+      env:
+        XDG_DATA_HOME: ${{ runner.temp }}/tabnine-pr-agent-opencode-data
+        AGENT_OUTPUT_FILE: ${{ runner.temp }}/tabnine-agent-output.txt
+      run: |
+        rm -rf "$XDG_DATA_HOME"
+        rm -f "$AGENT_OUTPUT_FILE"
+
+    - name: Cleanup Tabnine OpenCode
       if: always() && inputs.cleanup == 'true'
       shell: bash
       run: |
-        # Remove settings.json to prevent sensitive auth data from persisting
-        # between runs on self-hosted / named runners (e.g. GHES environments).
-        rm -f ~/.tabnine/agent/settings.json
+        if [ -f ~/.tabnine/opencode/uninstall-tabnine.sh ]; then
+          bash ~/.tabnine/opencode/uninstall-tabnine.sh --yes
+        else
+          echo "::warning::Tabnine OpenCode cleanup was requested, but the uninstaller was not found."
+        fi
 
 
 branding:
