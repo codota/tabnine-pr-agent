@@ -1,17 +1,19 @@
 # Tabnine PR Agent for GitHub
 #
 # This workflow runs an AI-powered code review on pull requests
-# using the Tabnine CLI Agent.
+# using Tabnine OpenCode.
 #
 # Copy this file to your repository at .github/workflows/tabnine-review.yml
 #
 # Required Secrets (set in Settings > Secrets and variables > Actions):
-#   TABNINE_KEY          - Tabnine authentication credentials (JSON). Store as a repository secret.
+#   TABNINE_KEY          - Tabnine Personal Access Token. Store as a repository secret.
 #
-# Optional Variables (set in Settings > Secrets and variables > Actions > Variables tab > "New repository variable"):
+# Required Variables (set in Settings > Secrets and variables > Actions > Variables tab > "New repository variable"):
+#   TABNINE_MODEL_ID     - Required model slug, either bare or prefixed with "tabnine/".
+#
+# Optional Variables:
 #   TABNINE_HOST         - Tabnine host URL (default: https://console.tabnine.com). Set this for self-hosted / EMT installations.
-#   TABNINE_MODEL_ID     - Model ID for the Tabnine CLI agent. If empty, falls back to DEFAULT_MODEL_ID below or the system default from the admin console.
-#   TABNINE_CLEANUP      - Set to "true" to delete settings.json after each run (default: "false"). Recommended for self-hosted runners.
+#   TABNINE_CLEANUP      - Set to "true" to uninstall action-managed OpenCode files after each run (default: "false"). Recommended for self-hosted runners.
 #   TABNINE_COMMENT_PREFIX - Prefix used to identify bot comments for cleanup (default: '#### Tabnine PR Bot').
 #   TABNINE_FETCH_DEPTH  - Clone depth for actions/checkout (default: "1", shallow). The built-in review uses the 'gh' API and does not need local git history.
 #                          Set to "0" for full history if you provide a custom prompt that inspects local git history (e.g. git log, git blame).
@@ -40,77 +42,28 @@ jobs:
           # custom prompt_override inspects local git history (e.g. git log, git blame, git diff base..head).
           fetch-depth: ${{ vars.TABNINE_FETCH_DEPTH || 1 }}
 
-      - name: Install Tabnine CLI
+      - name: Install Tabnine OpenCode
         shell: bash
+        env:
+          TABNINE_HOST: ${{ vars.TABNINE_HOST || 'https://console.tabnine.com' }}
         run: |
-          export TABNINE_HOST="${{ vars.TABNINE_HOST || 'https://console.tabnine.com' }}"
+          set -euo pipefail
 
-          # Download installer first, verify, then execute
-          curl -fsSL "$TABNINE_HOST/update/cli/installer.mjs" -o installer.mjs
-          node installer.mjs "$TABNINE_HOST"
+          curl -fsSL "$TABNINE_HOST/update/opencode/install.sh" \
+            | sh -s -- --no-login --force --no-modify-path
 
           # Verify installation succeeded
-          if [ ! -f ~/.local/bin/tabnine ]; then
-            echo "Error: Tabnine CLI installation failed"
+          if [ ! -x ~/.local/bin/tabnine ]; then
+            echo "Error: Tabnine OpenCode installation failed"
             exit 1
           fi
+          ~/.local/bin/tabnine --version
 
       - name: Configure git
         shell: bash
         run: |
           git config user.name "Tabnine CLI Agent"
           git config user.email "TabnineCLI@tabnine.com"
-
-      - name: Configure Tabnine Auth & Settings
-        shell: bash
-        env:
-          TABNINE_KEY: ${{ secrets.TABNINE_KEY }}
-        run: |
-          # Set a default model ID here, or leave empty to use the system default from the admin console.
-          DEFAULT_MODEL_ID=""
-
-          export TABNINE_HOST="${{ vars.TABNINE_HOST || 'https://console.tabnine.com' }}"
-          export TABNINE_MODEL_ID="${{ vars.TABNINE_MODEL_ID }}"
-
-          if [ -z "$TABNINE_KEY" ]; then
-            echo "Error: TABNINE_KEY is required"
-            exit 1
-          fi
-
-          mkdir -p ~/.tabnine/agent
-
-          # Resolve model ID: variable overrides the default
-          RESOLVED_MODEL_ID="${TABNINE_MODEL_ID:-$DEFAULT_MODEL_ID}"
-
-          # Build optional model block
-          MODEL_BLOCK=""
-          if [ -n "$RESOLVED_MODEL_ID" ]; then
-            MODEL_BLOCK=",\"model\":{\"name\":\"$RESOLVED_MODEL_ID\"}"
-          fi
-
-          # Write Settings
-          cat << EOF > ~/.tabnine/agent/settings.json
-          {
-            "general": {
-              "tabnineHost": "$TABNINE_HOST"
-            },
-            "security": {
-              "auth": {
-                "selectedType": "tabnine-personal"
-              }
-            }${MODEL_BLOCK}
-          }
-          EOF
-
-          chmod 600 ~/.tabnine/agent/settings.json
-
-      - name: Authenticate GitHub CLI
-        shell: bash
-        env:
-          GH_TOKEN_INPUT: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Use a different env var name to avoid conflict with GITHUB_TOKEN
-          echo "$GH_TOKEN_INPUT" | gh auth login --with-token
 
       - name: Clean Up Previous Bot Comments
         shell: bash
@@ -145,14 +98,28 @@ jobs:
         continue-on-error: true
         env:
           TABNINE_TOKEN: ${{ secrets.TABNINE_KEY }}
+          TABNINE_HOST: ${{ vars.TABNINE_HOST || 'https://console.tabnine.com' }}
+          TABNINE_MODEL_ID: ${{ vars.TABNINE_MODEL_ID }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          XDG_DATA_HOME: ${{ runner.temp }}/tabnine-pr-agent-opencode-data
+          AGENT_OUTPUT_FILE: ${{ runner.temp }}/tabnine-agent-output.txt
           COMMENT_PREFIX: ${{ vars.TABNINE_COMMENT_PREFIX || '#### Tabnine PR Bot' }}
         run: |
+          set -euo pipefail
+
           if [ -z "$TABNINE_TOKEN" ]; then
             echo "Error: TABNINE_KEY is required"
             exit 1
           fi
- 
-          ~/.local/bin/tabnine -y -p "## 1. Persona & Context
+
+          case "$TABNINE_MODEL_ID" in
+            tabnine/?*) MODEL="$TABNINE_MODEL_ID" ;;
+            */*) echo "Error: TABNINE_MODEL_ID must be a Tabnine model (bare slug or tabnine/<slug>)" >&2; exit 1 ;;
+            ?*) MODEL="tabnine/$TABNINE_MODEL_ID" ;;
+            *) echo "Error: TABNINE_MODEL_ID is required" >&2; exit 1 ;;
+          esac
+
+          ~/.local/bin/tabnine run --model "$MODEL" --auto "## 1. Persona & Context
           You are a collaborative Staff Engineer acting as a second pair of eyes on a teammate's PR.
           Your primary goal is to catch issues that genuinely matter -- bugs, security risks, data integrity problems, and production readiness gaps -- while respecting the author's expertise and intent.
           You are NOT a gatekeeper. You are a safety net. The author has thought about this code more than you have. Your job is to add value, not demonstrate thoroughness.
@@ -385,6 +352,8 @@ jobs:
 
           YOUR_SUMMARY'
 
+          **CRITICAL — failsafe**: Posting the summary via the 'gh api' command above is mandatory; it is the only thing that reaches the PR. Do NOT treat printing the summary as the assistant's final message as a substitute for running the command. After you have run the command, ALSO print the exact same summary text to stdout, on its own lines, wrapped between the literal markers <<<TABNINE_SUMMARY_START>>> and <<<TABNINE_SUMMARY_END>>>. The workflow uses these markers to recover and post the summary if the command above did not run, so they must surround the full summary (including the '$COMMENT_PREFIX' header line).
+
           Structure your summary as follows:
           - **Line 1 - Risk Tier**: State the tier: [Low Risk], [Standard], or [HIGH RISK]
           - **What This PR Does** (1-2 sentences): Demonstrate you understood the author's intent. This builds trust.
@@ -424,12 +393,73 @@ jobs:
           - 'Obviously...' / 'Clearly...' / 'Simply...' (condescending)
           - Restating what the code does without adding insight
 
-          **Comment Density Rule**: If you are about to post more than the tier's budget, re-evaluate all comments and keep only the most impactful. Developers ignore reviews with too many comments."
+          **Comment Density Rule**: If you are about to post more than the tier's budget, re-evaluate all comments and keep only the most impactful. Developers ignore reviews with too many comments." | tee "$AGENT_OUTPUT_FILE"
 
-      - name: Cleanup Tabnine Settings
+      - name: Ensure summary comment posted
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMENT_PREFIX: ${{ vars.TABNINE_COMMENT_PREFIX || '#### Tabnine PR Bot' }}
+          AGENT_OUTPUT_FILE: ${{ runner.temp }}/tabnine-agent-output.txt
+        run: |
+          existing=$(gh api "/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+            --jq "[.[] | select(.body | startswith(env.COMMENT_PREFIX))] | length" 2>/dev/null || echo 0)
+
+          if [ "${existing:-0}" -gt 0 ]; then
+            echo "Summary comment already posted by the agent; nothing to do."
+            exit 0
+          fi
+
+          if [ ! -s "$AGENT_OUTPUT_FILE" ]; then
+            echo "::warning::Tabnine agent posted no summary comment and no agent output was captured; skipping fallback."
+            exit 0
+          fi
+
+          clean=$(sed -E 's/\x1b\[[0-9;]*[a-zA-Z]//g' "$AGENT_OUTPUT_FILE")
+          summary=$(printf '%s\n' "$clean" | awk '
+            /<<<TABNINE_SUMMARY_START>>>/ { cap=1; buf=""; next }
+            /<<<TABNINE_SUMMARY_END>>>/   { if (cap) { printf "%s", buf; cap=0 } next }
+            cap { buf = buf $0 "\n" }
+          ')
+
+          if [ -z "${summary//[$' \t\r\n']/}" ]; then
+            summary=$(printf '%s\n' "$clean" | awk -v p="$COMMENT_PREFIX" '
+              index($0, p) == 1 { start = NR }
+              { lines[NR] = $0 }
+              END {
+                if (!start) exit
+                end = NR
+                for (i = start; i <= NR; i++) if (lines[i] ~ /<\/details>/) { end = i; break }
+                for (i = start; i <= end; i++) print lines[i]
+              }
+            ')
+          fi
+
+          if [ -z "${summary//[$' \t\r\n']/}" ]; then
+            echo "::warning::Tabnine agent did not post a summary comment and none could be recovered from its output."
+            exit 0
+          fi
+
+          echo "Tabnine agent did not post its summary; posting the recovered summary as a fallback."
+          gh api --method POST "/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" -f body="$summary"
+
+      - name: Cleanup temporary OpenCode data
+        if: always()
+        shell: bash
+        env:
+          XDG_DATA_HOME: ${{ runner.temp }}/tabnine-pr-agent-opencode-data
+          AGENT_OUTPUT_FILE: ${{ runner.temp }}/tabnine-agent-output.txt
+        run: |
+          rm -rf "$XDG_DATA_HOME"
+          rm -f "$AGENT_OUTPUT_FILE"
+
+      - name: Cleanup Tabnine OpenCode
         if: always() && vars.TABNINE_CLEANUP == 'true'
         shell: bash
         run: |
-          # Remove settings.json to prevent sensitive auth data from persisting
-          # between runs on self-hosted / named runners (e.g. GHES environments).
-          rm -f ~/.tabnine/agent/settings.json
+          if [ -f ~/.tabnine/opencode/uninstall-tabnine.sh ]; then
+            bash ~/.tabnine/opencode/uninstall-tabnine.sh --yes
+          else
+            echo "::warning::Tabnine OpenCode cleanup was requested, but the uninstaller was not found."
+          fi
