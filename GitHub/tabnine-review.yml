@@ -49,8 +49,42 @@ jobs:
         run: |
           set -euo pipefail
 
-          curl -fsSL "$TABNINE_HOST/update/opencode/install.sh" \
-            | sh -s -- --no-login --force --no-modify-path
+          # Resolve and run the platform bundle directly rather than the
+          # install.sh one-liner: that helper reopens /dev/tty to prompt, which
+          # fails on a runner with no controlling terminal.
+          HOST="${TABNINE_HOST%/}"
+
+          case "$(uname -s)" in
+            Linux) OS=linux ;;
+            Darwin) OS=darwin ;;
+            *) echo "Error: unsupported OS $(uname -s)" >&2; exit 1 ;;
+          esac
+
+          # uname -m describes the process, not the machine: under Rosetta it
+          # reports x86_64 on Apple Silicon.
+          if [ "$OS" = darwin ] && [ "$(sysctl -n hw.optional.arm64 2>/dev/null || echo 0)" = 1 ]; then
+            ARCH=arm64
+          else
+            case "$(uname -m)" in
+              x86_64|amd64) ARCH=x64 ;;
+              arm64|aarch64) ARCH=arm64 ;;
+              *) echo "Error: unsupported architecture $(uname -m)" >&2; exit 1 ;;
+            esac
+          fi
+
+          VERSION="$(curl -fsSL "$HOST/update/opencode/version" | tr -d '\r\n\t ')"
+          case "$VERSION" in
+            ""|*[!A-Za-z0-9._-]*)
+              echo "Error: invalid version from $HOST/update/opencode/version: $VERSION" >&2
+              exit 1
+              ;;
+          esac
+
+          BUNDLE="$(mktemp "${TMPDIR:-/tmp}/tabnine-opencode.XXXXXX")"
+          trap 'rm -f "$BUNDLE"' EXIT
+          curl -fsSL -o "$BUNDLE" \
+            "$HOST/update/opencode/$VERSION/tabnine-opencode-$VERSION-$OS-$ARCH.run"
+          sh "$BUNDLE" -- --no-login --force --no-modify-path
 
           # Verify installation succeeded
           if [ ! -x ~/.local/bin/tabnine ]; then

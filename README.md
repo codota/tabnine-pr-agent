@@ -145,10 +145,14 @@ jobs:
           base_sha: ${{ github.event.pull_request.base.sha }}
 ```
 
-The action installs the latest Tabnine OpenCode distribution from
-`$TABNINE_HOST/update/opencode/install.sh`, skips interactive login, and runs:
+The action installs the latest Tabnine OpenCode bundle for the runner's platform
+from `$TABNINE_HOST/update/opencode/`, skips interactive login, and runs:
 `tabnine run --model tabnine/<model-slug> --auto <prompt>`. A bare `model_id`
 is automatically prefixed with `tabnine/`; other provider prefixes are rejected.
+
+It downloads the `.run` bundle directly instead of using the
+`install.sh` one-liner, because that helper reopens `/dev/tty` to prompt and
+therefore fails on a runner with no controlling terminal.
 
 ### Summary comment failsafe
 
