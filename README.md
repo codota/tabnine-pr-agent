@@ -80,7 +80,7 @@ permissions:
     # Display name for the agent step (optional, default: 'Tabnine Agent')
     # step_name: "Tabnine Agent"
 
-    # Prefix used to identify bot comments for cleanup (optional, default: '#### Tabnine PR Bot')
+    # Prefix used to identify bot comments (optional, default: '#### Tabnine PR Bot')
     # Use a unique value per action invocation to avoid cross-cleanup.
     # comment_prefix: "#### Tabnine PR Bot"
 
@@ -153,6 +153,23 @@ is automatically prefixed with `tabnine/`; other provider prefixes are rejected.
 It downloads the `.run` bundle directly instead of using the
 `install.sh` one-liner, because that helper reopens `/dev/tty` to prompt and
 therefore fails on a runner with no controlling terminal.
+
+### Review lifecycle (GitHub)
+
+**Skipping a review**: start the head commit message with `[skip-review]`
+(case-insensitive). Only the head commit is checked; the next review covers
+every commit since the last reviewed one.
+
+**Cancelling superseded runs**: `GitHub/tabnine-review.yml` has a `concurrency`
+group per pull request with `cancel-in-progress: true`, so a new push cancels the
+review still running for the previous push. A composite action cannot set this, so
+if you call the action from your own workflow, add the same block there:
+
+```yaml
+concurrency:
+  group: tabnine-pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+```
 
 ### Summary comment failsafe
 
