@@ -109,6 +109,8 @@ permissions:
 
 ## Full Workflow Example
 
+When using the standalone `GitHub/tabnine-review.yml` instead of the composite action, copy the workflow to `.github/workflows/tabnine-review.yml` and copy `prompts/github-review-v1.md` to `.github/prompts/github-review-v1.md` in the target repository. The standalone workflow requires both files.
+
 ```yaml
 name: "Tabnine PR Review Agent"
 
