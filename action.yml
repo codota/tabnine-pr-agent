@@ -199,43 +199,117 @@ runs:
         REPO: ${{ inputs.repository }}
         PR_NUMBER: ${{ inputs.pull_request_number }}
         HEAD_SHA: ${{ inputs.head_sha }}
+        BASE_SHA: ${{ inputs.base_sha }}
         STATE_DIR: ${{ runner.temp }}/tabnine-review-state
       run: |
         set -euo pipefail
         rm -rf "$STATE_DIR"
         mkdir -p "$STATE_DIR"
 
-        # Existing comments are passed to the agent as files instead of being deleted:
-        # the agent decides whether to re-review from scratch or only check the fixes.
+        BOT_LOGIN="$(gh api /user --jq .login 2>/dev/null || printf '%s' 'github-actions[bot]')"
+        export BOT_LOGIN
+        printf '%s\n' "$BOT_LOGIN" > "$STATE_DIR/bot_login.txt"
         gh api --paginate "/repos/$REPO/issues/$PR_NUMBER/comments" \
-          --jq '.[] | {id, user: .user.login, created_at, is_bot_review: (.body | startswith(env.COMMENT_PREFIX)), body}' \
+          --jq '.[] | {id, user: .user.login, created_at, is_bot_review: ((.user.login == env.BOT_LOGIN) and (.body | startswith(env.COMMENT_PREFIX))), body}' \
           > "$STATE_DIR/issue_comments.jsonl"
         gh api --paginate "/repos/$REPO/pulls/$PR_NUMBER/comments" \
-          --jq '.[] | {id, in_reply_to_id, user: .user.login, path, line, original_line, commit_id, original_commit_id, created_at, is_bot_review: (.body | startswith(env.COMMENT_PREFIX)), body}' \
+          --jq '.[] | {id, in_reply_to_id, user: .user.login, path, line, original_line, commit_id, original_commit_id, created_at, is_bot_review: ((.user.login == env.BOT_LOGIN) and (.body | startswith(env.COMMENT_PREFIX))), body}' \
           > "$STATE_DIR/review_comments.jsonl"
-        # Ids present before the run, so the fallback step can tell whether the agent posted a summary.
         gh api --paginate "/repos/$REPO/issues/$PR_NUMBER/comments" --jq '.[].id' > "$STATE_DIR/issue_comment_ids.txt"
 
-        # Every bot summary carries <!-- tabnine-reviewed-sha:<40 hex> -->; the last one wins.
-        LAST_SHA="$(grep '"is_bot_review":true' "$STATE_DIR/issue_comments.jsonl" \
-          | grep -oE 'tabnine-reviewed-sha:[0-9a-f]{40}' | tail -n1 | cut -d: -f2 || true)"
+        LAST_SHA="$(jq -r 'select(.is_bot_review == true) | .body | select(([scan("tabnine-reviewed-sha:[0-9a-f]{40}")] | length) == 1) | capture("tabnine-reviewed-sha:(?<sha>[0-9a-f]{40})").sha' \
+          "$STATE_DIR/issue_comments.jsonl" | tail -n1)"
 
         HINT=clean
         if [ -z "$LAST_SHA" ]; then
           REASON="no previous review of this PR found"
         elif [ "$LAST_SHA" = "$HEAD_SHA" ]; then
           REASON="the head commit was already reviewed (re-run), so review it again from scratch"
-        elif STATUS="$(gh api "/repos/$REPO/compare/$LAST_SHA...$HEAD_SHA" --jq .status 2>/dev/null)" && [ "$STATUS" = "ahead" ]; then
-          gh api "/repos/$REPO/compare/$LAST_SHA...$HEAD_SHA" \
-            --jq '.commits[] | {sha, author: .commit.author.name, message: .commit.message}' \
-            > "$STATE_DIR/commits_since_last_review.jsonl"
-          gh api "/repos/$REPO/compare/$LAST_SHA...$HEAD_SHA" \
-            --jq '.files[]? | {filename, status, additions, deletions}' \
-            > "$STATE_DIR/files_since_last_review.jsonl"
-          HINT=classify
-          REASON="$(wc -l < "$STATE_DIR/commits_since_last_review.jsonl" | tr -d ' ') commit(s) pushed since the last review"
-        else
+        elif ! STATUS="$(gh api "/repos/$REPO/compare/$LAST_SHA...$HEAD_SHA" --jq .status)"; then
+          REASON="GitHub could not compare the last reviewed commit with the head"
+          echo "::warning::$REASON; using a clean review"
+        elif [ "$STATUS" != "ahead" ]; then
           REASON="the last reviewed commit is no longer an ancestor of the head (force push or rebase)"
+        else
+          OWNER="${REPO%%/*}"
+          NAME="${REPO#*/}"
+          gh api graphql --paginate -F owner="$OWNER" -F name="$NAME" -F number="$PR_NUMBER" -f query='
+            query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
+              repository(owner: $owner, name: $name) {
+                pullRequest(number: $number) {
+                  commits(first: 100, after: $endCursor) {
+                    nodes { commit { oid parents(first: 100) { nodes { oid } } } }
+                    pageInfo { hasNextPage endCursor }
+                  }
+                }
+              }
+            }' \
+            --jq '.data.repository.pullRequest.commits.nodes[] | [.commit.oid, [.commit.parents.nodes[].oid]] | @base64' \
+            > "$STATE_DIR/pr_commits.txt"
+          : > "$STATE_DIR/pr_commit_shas.txt"
+          : > "$STATE_DIR/base_merge_shas.txt"
+          while IFS= read -r RECORD; do
+            [ -n "$RECORD" ] || continue
+            COMMIT="$(printf '%s' "$RECORD" | base64 --decode)"
+            SHA="$(printf '%s' "$COMMIT" | jq -r '.[0]')"
+            BASE_MERGE=false
+            if [ "$(printf '%s' "$COMMIT" | jq '.[1] | length')" -gt 1 ]; then
+              while IFS= read -r PARENT_SHA; do
+                PARENT_STATUS="$(gh api "/repos/$REPO/compare/$PARENT_SHA...$BASE_SHA" --jq .status)"
+                if [ "$PARENT_STATUS" = "ahead" ] || [ "$PARENT_STATUS" = "identical" ]; then
+                  BASE_MERGE=true
+                  break
+                fi
+              done < <(printf '%s' "$COMMIT" | jq -r '.[1][]')
+            fi
+            if [ "$BASE_MERGE" = true ]; then
+              printf '%s\n' "$SHA" >> "$STATE_DIR/base_merge_shas.txt"
+            else
+              printf '%s\n' "$SHA" >> "$STATE_DIR/pr_commit_shas.txt"
+            fi
+          done < "$STATE_DIR/pr_commits.txt"
+
+          gh api --paginate "/repos/$REPO/compare/$LAST_SHA...$HEAD_SHA?per_page=100" \
+            --jq '.commits[].sha' \
+            > "$STATE_DIR/all_since_last_review_shas.txt"
+          grep -Fxf "$STATE_DIR/pr_commit_shas.txt" "$STATE_DIR/all_since_last_review_shas.txt" \
+            > "$STATE_DIR/relevant_commit_shas.txt" || true
+
+          BASE_MERGED_SINCE_REVIEW=false
+          while IFS= read -r MERGE_SHA; do
+            [ -n "$MERGE_SHA" ] || continue
+            if grep -qxF "$MERGE_SHA" "$STATE_DIR/all_since_last_review_shas.txt"; then
+              BASE_MERGED_SINCE_REVIEW=true
+              break
+            fi
+          done < "$STATE_DIR/base_merge_shas.txt"
+
+          : > "$STATE_DIR/commits_since_last_review.jsonl"
+          : > "$STATE_DIR/files_since_last_review.raw.jsonl"
+          : > "$STATE_DIR/changes_since_last_review.diff"
+          while IFS= read -r SHA; do
+            [ -n "$SHA" ] || continue
+            gh api "/repos/$REPO/commits/$SHA" \
+              --jq '{sha, author: .commit.author.name, message: .commit.message}' \
+              >> "$STATE_DIR/commits_since_last_review.jsonl"
+            gh api --paginate "/repos/$REPO/commits/$SHA?per_page=100" \
+              --jq '.files[]? | {filename, status, additions, deletions}' \
+              >> "$STATE_DIR/files_since_last_review.raw.jsonl"
+            gh api "/repos/$REPO/commits/$SHA" -H 'Accept: application/vnd.github.v3.diff' \
+              >> "$STATE_DIR/changes_since_last_review.diff"
+            printf '\n' >> "$STATE_DIR/changes_since_last_review.diff"
+          done < "$STATE_DIR/relevant_commit_shas.txt"
+
+          jq -s 'sort_by(.filename) | group_by(.filename)[] | {filename: .[0].filename, status: .[-1].status, additions: (map(.additions) | add), deletions: (map(.deletions) | add)}' \
+            "$STATE_DIR/files_since_last_review.raw.jsonl" \
+            > "$STATE_DIR/files_since_last_review.jsonl"
+          if [ "$BASE_MERGED_SINCE_REVIEW" = true ]; then
+            HINT=clean
+            REASON="the base branch was merged since the last review; using a clean review to cover conflict resolutions"
+          else
+            HINT=classify
+            REASON="$(wc -l < "$STATE_DIR/commits_since_last_review.jsonl" | tr -d ' ') PR commit(s) pushed since the last review"
+          fi
         fi
 
         echo "Last reviewed commit: ${LAST_SHA:-none}"
@@ -342,8 +416,11 @@ runs:
         # pre-run snapshot. Inline review comments live on a different endpoint
         # (pulls/comments), so they never satisfy this check.
         mkdir -p "$STATE_DIR" && touch "$STATE_DIR/issue_comment_ids.txt"
+        REVIEW_MARKER="<!-- tabnine-reviewed-sha:$HEAD_SHA -->"
+        BOT_LOGIN="$(cat "$STATE_DIR/bot_login.txt" 2>/dev/null || true)"
+        export REVIEW_MARKER BOT_LOGIN
         existing=$({ gh api --paginate "/repos/$REPO/issues/$PR_NUMBER/comments" \
-          --jq '.[] | select(.body | startswith(env.COMMENT_PREFIX)) | .id' 2>/dev/null \
+          --jq '.[] | select((.user.login == env.BOT_LOGIN) and (.body | startswith(env.COMMENT_PREFIX)) and (.body | contains(env.REVIEW_MARKER)) and (([.body | scan("tabnine-reviewed-sha:[0-9a-f]{40}")] | length) == 1)) | .id' 2>/dev/null \
           | grep -vxFf "$STATE_DIR/issue_comment_ids.txt" || true; } | wc -l | tr -d ' ')
 
         if [ "${existing:-0}" -gt 0 ]; then
@@ -366,8 +443,9 @@ runs:
 
         summary=$(printf '%s\n' "$clean" | awk '
           /<<<TABNINE_SUMMARY_START>>>/ { cap=1; buf=""; next }
-          /<<<TABNINE_SUMMARY_END>>>/   { if (cap) { printf "%s", buf; cap=0 } next }
+          /<<<TABNINE_SUMMARY_END>>>/   { if (cap) { last=buf; cap=0 } next }
           cap { buf = buf $0 "\n" }
+          END { printf "%s", last }
         ')
 
         if [ -z "${summary//[$' \t\r\n']/}" ]; then
@@ -388,13 +466,61 @@ runs:
           exit 0
         fi
 
-        # The summary must carry the reviewed-commit marker used by the next run.
-        if ! printf '%s' "$summary" | grep -q 'tabnine-reviewed-sha:'; then
-          summary=$(printf '%s\n' "$summary" | awk -v m="<!-- tabnine-reviewed-sha:$HEAD_SHA -->" 'NR==1 { print; print ""; print m; next } { print }')
+        if [ "$(printf '%s\n' "$summary" | sed -n '1p')" != "$COMMENT_PREFIX" ]; then
+          echo "::warning::Recovered output was not a Tabnine summary; skipping fallback."
+          exit 0
         fi
+
+        summary=$(printf '%s\n' "$summary" \
+          | sed -E 's/<!--[[:space:]]*tabnine-reviewed-sha:[^>]*-->//g; s/tabnine-reviewed-sha:[0-9a-f]{40}//g' \
+          | awk -v m="<!-- tabnine-reviewed-sha:$HEAD_SHA -->" 'NR==1 { print; print ""; print m; next } { print }')
 
         echo "Tabnine agent did not post its summary; posting the recovered summary as a fallback."
         gh api --method POST "/repos/$REPO/issues/$PR_NUMBER/comments" -f body="$summary"
+
+    - name: Remove superseded clean-review comments
+      if: ${{ !cancelled() && steps.skip.outputs.skip != 'true' && inputs.prompt_override == '' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        COMMENT_PREFIX: ${{ inputs.comment_prefix }}
+        STATE_DIR: ${{ runner.temp }}/tabnine-review-state
+        HEAD_SHA: ${{ inputs.head_sha }}
+        REPO: ${{ inputs.repository }}
+        PR_NUMBER: ${{ inputs.pull_request_number }}
+      run: |
+        set -euo pipefail
+        REVIEW_MARKER="<!-- tabnine-reviewed-sha:$HEAD_SHA -->"
+        BOT_LOGIN="$(cat "$STATE_DIR/bot_login.txt" 2>/dev/null || true)"
+        export REVIEW_MARKER BOT_LOGIN
+        summary_body="$(gh api --paginate "/repos/$REPO/issues/$PR_NUMBER/comments" \
+          --jq '.[] | select((.user.login == env.BOT_LOGIN) and (.body | startswith(env.COMMENT_PREFIX)) and (.body | contains(env.REVIEW_MARKER)) and (([.body | scan("tabnine-reviewed-sha:[0-9a-f]{40}")] | length) == 1)) | [.id, .body] | @base64' \
+          | while IFS= read -r RECORD; do
+              ID="$(printf '%s' "$RECORD" | base64 --decode | jq -r '.[0]')"
+              if ! grep -qxF "$ID" "$STATE_DIR/issue_comment_ids.txt"; then
+                printf '%s' "$RECORD" | base64 --decode | jq -r '.[1]'
+              fi
+            done)"
+
+        mode="$(cat "$STATE_DIR/review_mode" 2>/dev/null || true)"
+        if [ "$mode" != "clean" ]; then
+          echo "Review mode was not clean; preserving previous comments."
+          exit 0
+        fi
+        if [ -z "$summary_body" ]; then
+          echo "::error::A clean review did not post a new valid summary for $HEAD_SHA; preserving previous comments."
+          exit 1
+        fi
+
+        jq -r 'select(.is_bot_review == true) | .id' "$STATE_DIR/issue_comments.jsonl" | while IFS= read -r COMMENT_ID; do
+          gh api --method DELETE "/repos/$REPO/issues/comments/$COMMENT_ID" || \
+            echo "::warning::Could not delete old summary comment $COMMENT_ID"
+        done
+        jq -sr 'map(select(.is_bot_review == true)) | sort_by(.in_reply_to_id == null)[] | .id' "$STATE_DIR/review_comments.jsonl" | while IFS= read -r COMMENT_ID; do
+          gh api --method DELETE "/repos/$REPO/pulls/comments/$COMMENT_ID" || \
+            echo "::warning::Could not delete old review comment $COMMENT_ID"
+        done
+        echo "Removed superseded bot comments after posting the clean-review summary."
 
     - name: Cleanup temporary OpenCode data
       if: always()
