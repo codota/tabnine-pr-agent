@@ -206,7 +206,13 @@ runs:
         rm -rf "$STATE_DIR"
         mkdir -p "$STATE_DIR"
 
-        BOT_LOGIN="$(gh api /user --jq .login 2>/dev/null || printf '%s' 'github-actions[bot]')"
+        # gh writes the error body to stdout when a request fails (--jq is skipped), so
+        # keep the output only on success. GITHUB_TOKEN is an installation token: /user
+        # returns 403 for it.
+        if ! BOT_LOGIN="$(gh api /user --jq .login 2>/dev/null)" || [ -z "$BOT_LOGIN" ]; then
+          BOT_LOGIN='github-actions[bot]'
+        fi
+        echo "Bot login: $BOT_LOGIN"
         export BOT_LOGIN
         printf '%s\n' "$BOT_LOGIN" > "$STATE_DIR/bot_login.txt"
         gh api --paginate "/repos/$REPO/issues/$PR_NUMBER/comments" \
@@ -216,6 +222,7 @@ runs:
           --jq '.[] | {id, in_reply_to_id, user: .user.login, path, line, original_line, commit_id, original_commit_id, created_at, is_bot_review: ((.user.login == env.BOT_LOGIN) and (.body | startswith(env.COMMENT_PREFIX))), body}' \
           > "$STATE_DIR/review_comments.jsonl"
         gh api --paginate "/repos/$REPO/issues/$PR_NUMBER/comments" --jq '.[].id' > "$STATE_DIR/issue_comment_ids.txt"
+        echo "Bot comments found: $(jq -s 'map(select(.is_bot_review)) | length' "$STATE_DIR/issue_comments.jsonl") summary, $(jq -s 'map(select(.is_bot_review)) | length' "$STATE_DIR/review_comments.jsonl") inline (of $(wc -l < "$STATE_DIR/issue_comment_ids.txt" | tr -d ' ') conversation comments)"
 
         LAST_SHA="$(jq -r 'select(.is_bot_review == true) | .body | select(([scan("tabnine-reviewed-sha:[0-9a-f]{40}")] | length) == 1) | capture("tabnine-reviewed-sha:(?<sha>[0-9a-f]{40})").sha' \
           "$STATE_DIR/issue_comments.jsonl" | tail -n1)"
@@ -423,6 +430,8 @@ runs:
           --jq '.[] | select((.user.login == env.BOT_LOGIN) and (.body | startswith(env.COMMENT_PREFIX)) and (.body | contains(env.REVIEW_MARKER)) and (([.body | scan("tabnine-reviewed-sha:[0-9a-f]{40}")] | length) == 1)) | .id' 2>/dev/null \
           | grep -vxFf "$STATE_DIR/issue_comment_ids.txt" || true; } | wc -l | tr -d ' ')
 
+        echo "Bot login: ${BOT_LOGIN:-<missing>}; new summaries for $HEAD_SHA: ${existing:-0}"
+
         if [ "${existing:-0}" -gt 0 ]; then
           echo "Summary comment already posted by the agent; nothing to do."
           exit 0
@@ -503,6 +512,7 @@ runs:
             done)"
 
         mode="$(cat "$STATE_DIR/review_mode" 2>/dev/null || true)"
+        echo "Bot login: ${BOT_LOGIN:-<missing>}; review mode: ${mode:-<missing>}; new summary found: $([ -n "$summary_body" ] && echo yes || echo no)"
         if [ "$mode" != "clean" ]; then
           echo "Review mode was not clean; preserving previous comments."
           exit 0
