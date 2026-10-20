@@ -532,6 +532,38 @@ runs:
         done
         echo "Removed superseded bot comments after posting the clean-review summary."
 
+    - name: Collect agent logs
+      id: collect_logs
+      # A timeout cancels the job, so cancelled() must be covered as well as failure().
+      if: ${{ (failure() || cancelled()) && steps.skip.outputs.skip != 'true' }}
+      shell: bash
+      env:
+        XDG_DATA_HOME: ${{ runner.temp }}/tabnine-pr-agent-opencode-data
+        AGENT_OUTPUT_FILE: ${{ runner.temp }}/tabnine-agent-output.txt
+        LOGS_DIR: ${{ runner.temp }}/tabnine-agent-logs
+      run: |
+        # Only logs are copied: never auth.json or the rest of the data dir.
+        rm -rf "$LOGS_DIR"
+        mkdir -p "$LOGS_DIR/tabnine" "$LOGS_DIR/opencode"
+        cp -p ~/.tabnine/opencode/logs/cli-*.log "$LOGS_DIR/tabnine/" 2>/dev/null || true
+        cp -p "$XDG_DATA_HOME"/opencode/log/*.log "$LOGS_DIR/opencode/" 2>/dev/null || true
+        cp -p "$AGENT_OUTPUT_FILE" "$LOGS_DIR/agent-output.txt" 2>/dev/null || true
+        if [ -n "$(find "$LOGS_DIR" -type f -print -quit)" ]; then
+          echo "path=$LOGS_DIR" >> "$GITHUB_OUTPUT"
+        else
+          echo "::warning::No Tabnine or OpenCode logs found to upload."
+        fi
+
+    - name: Upload agent logs
+      if: ${{ (failure() || cancelled()) && steps.collect_logs.outputs.path != '' }}
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: tabnine-agent-logs-${{ github.run_id }}-${{ github.run_attempt }}-pr${{ inputs.pull_request_number }}
+        path: ${{ steps.collect_logs.outputs.path }}
+        retention-days: 7
+        overwrite: true
+        if-no-files-found: ignore
+
     - name: Cleanup temporary OpenCode data
       if: always()
       shell: bash

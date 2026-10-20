@@ -23,6 +23,8 @@ Set `TABNINE_MODEL_ID`, and optionally the other repository variables, in **Sett
 | `TABNINE_HOST` | No | Tabnine host URL for self-hosted / EMT installations (default: `https://console.tabnine.com`) |
 | `TABNINE_MODEL_ID` | Yes | Tabnine model slug, either bare (for example `claude-sonnet-4-5`) or prefixed with `tabnine/`. |
 | `TABNINE_CLEANUP` | No | Set to `"true"` to uninstall action-managed Tabnine OpenCode files after each run. Recommended for self-hosted runners. Temporary auth data is always removed. |
+
+When the agent step fails or is cancelled (including a job timeout), the action uploads the Tabnine and OpenCode logs plus the agent's console output as the `tabnine-agent-logs-<run_id>-<attempt>-pr<number>` artifact (kept 7 days). The logs can contain PR diff content, so they are visible to anyone who can read the workflow run.
 | `TABNINE_COMMENT_PREFIX` | No | Prefix used to identify bot comments for cleanup (default: `#### Tabnine PR Bot`). |
 | `TABNINE_FETCH_DEPTH` | No | Clone depth for `actions/checkout`. Default `"1"` (shallow) is sufficient — the built-in review uses the `gh` API and does not need local git history. Set to `"0"` for full history only if your `prompt_override` inspects local git history (e.g. `git log`, `git blame`). |
 

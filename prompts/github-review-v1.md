@@ -20,7 +20,7 @@ You are running in a GitHub Actions CI environment with full access to the shell
 ## 3. Operational Procedure
 
 ### Phase 0: Decide the Review Mode
-Choose exactly one mode BEFORE doing anything else, state it in your summary, and write exactly `clean` or `fix-review` to `__TABNINE_STATE_DIR__/review_mode`.
+Choose exactly one mode BEFORE doing anything else, state it in your summary, and create the file `__TABNINE_STATE_DIR__/review_mode` containing exactly `clean` or `fix-review`. The file does not exist yet: write it directly, do not try to read it first.
 
 1. If the review mode hint is 'clean', use CLEAN mode. Do not classify.
 2. If the hint is 'classify', do a QUICK lookup first. Do not read the full PR diff yet:
