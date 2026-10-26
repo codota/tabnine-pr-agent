@@ -20,6 +20,8 @@
 #   step_name            - Display name for the agent step (default: 'Tabnine Agent').
 #   comment_prefix       - Prefix used to identify bot comments (default: '#### Tabnine PR Bot'). Each action invocation should use a unique prefix to avoid interfering with other invocations.
 #   cleanup              - Set to "true" to uninstall action-managed OpenCode files after each run (default: "false"). Recommended for self-hosted runners.
+#   debug                - Set to "true" to run the agent with --print-logs --log-level DEBUG (default: "false"). Logs go to the step output and to the failure artifact.
+#   agent_timeout_minutes - Minutes after which the agent process is killed (default: "20"), so the log collection below still runs before the job timeout.
 
 # Skip a review by starting the head commit message with [skip-review].
 # To cancel a running review when a new commit is pushed, add a 'concurrency' block with
@@ -46,6 +48,14 @@ inputs:
     required: false
     description: 'Set to "true" to uninstall the action-managed Tabnine OpenCode files after each run. Recommended for self-hosted runners.'
     default: 'false'
+  debug:
+    required: false
+    description: 'Set to "true" to run the agent with --print-logs --log-level DEBUG.'
+    default: 'false'
+  agent_timeout_minutes:
+    required: false
+    description: 'Minutes after which the agent process is killed. Keep it below the calling job timeout so the failure logs are still collected.'
+    default: '20'
   repository:
     required: true
     description: 'Repository in owner/repo format'
@@ -337,6 +347,8 @@ runs:
         MODEL_ID: ${{ inputs.model_id }}
         GH_TOKEN: ${{ inputs.github_token }}
         PROMPT_OVERRIDE: ${{ inputs.prompt_override }}
+        DEBUG: ${{ inputs.debug }}
+        AGENT_TIMEOUT_MINUTES: ${{ inputs.agent_timeout_minutes }}
         STATE_DIR: ${{ steps.state.outputs.state_dir }}
         LAST_REVIEWED_SHA: ${{ steps.state.outputs.last_sha }}
         REVIEW_MODE_HINT: ${{ steps.state.outputs.mode_hint }}
@@ -365,8 +377,28 @@ runs:
           *) echo "Error: model_id is required" >&2; exit 1 ;;
         esac
 
+        case "$AGENT_TIMEOUT_MINUTES" in
+          ""|*[!0-9]*) echo "Error: agent_timeout_minutes must be a whole number" >&2; exit 1 ;;
+        esac
+
+        DEBUG_ARGS=()
+        if [ "$DEBUG" = true ]; then
+          DEBUG_ARGS=(--print-logs --log-level DEBUG)
+        fi
+
+        # Kill the agent before the job timeout so the log-collection steps below still run. A hang
+        # surfaces as exit code 124.
+        run_agent() {
+          # macOS runners have no timeout binary: run unbounded there rather than fail.
+          local guard=()
+          if command -v timeout >/dev/null 2>&1; then
+            guard=(timeout --kill-after=30s "${AGENT_TIMEOUT_MINUTES}m")
+          fi
+          ${guard[@]+"${guard[@]}"} ~/.local/bin/tabnine run ${DEBUG_ARGS[@]+"${DEBUG_ARGS[@]}"} --model "$MODEL" --auto "$1"
+        }
+
         if [ -n "$PROMPT_OVERRIDE" ]; then
-          ~/.local/bin/tabnine run --model "$MODEL" --auto "$PROMPT_OVERRIDE"
+          run_agent "$PROMPT_OVERRIDE"
           exit 0
         fi
       
@@ -396,7 +428,7 @@ runs:
         render_value __TABNINE_REVIEW_MODE_REASON__ "$REVIEW_MODE_REASON"
         render_value __TABNINE_COMMENT_PREFIX__ "$COMMENT_PREFIX"
 
-        ~/.local/bin/tabnine run --model "$MODEL" --auto "$(cat "$RENDERED_PROMPT")" | tee "$AGENT_OUTPUT_FILE"
+        run_agent "$(cat "$RENDERED_PROMPT")" | tee "$AGENT_OUTPUT_FILE"
 
     - name: Ensure summary comment posted
       # The agent is instructed (Phase D) to POST its summary by running 'gh api'.
@@ -542,9 +574,11 @@ runs:
         AGENT_OUTPUT_FILE: ${{ runner.temp }}/tabnine-agent-output.txt
         LOGS_DIR: ${{ runner.temp }}/tabnine-agent-logs
       run: |
-        # Only logs are copied: never auth.json or the rest of the data dir.
+        # Only logs and the session database are copied: never auth.json or the rest of the data dir.
+        # The database holds every session, subagents included, with their tool calls.
         rm -rf "$LOGS_DIR"
-        mkdir -p "$LOGS_DIR/tabnine" "$LOGS_DIR/opencode"
+        mkdir -p "$LOGS_DIR/tabnine" "$LOGS_DIR/opencode" "$LOGS_DIR/sessions"
+        cp -p "$XDG_DATA_HOME"/opencode/*.db* "$LOGS_DIR/sessions/" 2>/dev/null || true
         cp -p ~/.tabnine/opencode/logs/cli-*.log "$LOGS_DIR/tabnine/" 2>/dev/null || true
         cp -p "$XDG_DATA_HOME"/opencode/log/*.log "$LOGS_DIR/opencode/" 2>/dev/null || true
         cp -p "$AGENT_OUTPUT_FILE" "$LOGS_DIR/agent-output.txt" 2>/dev/null || true
