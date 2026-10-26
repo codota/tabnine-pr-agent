@@ -18,4 +18,4 @@ jobs:
         uses: usehaystack/jira-pr-link-action@22aff45075226d8971865093c4c0473262f351ed # v4
         with:
           ignore-author: dependabot[bot]
-          project: "DEV2|DEV3"
+          project: "DEV2|DEV3|TBN"
