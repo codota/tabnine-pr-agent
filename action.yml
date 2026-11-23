@@ -81,10 +81,19 @@ runs:
         node installer.mjs "$TABNINE_HOST"
 
         # Verify installation succeeded
-        if [ ! -f ~/.local/bin/tabnine ]; then
+        TABNINE_BIN=""
+        for candidate in ~/.local/bin/tabnine-legacy ~/.local/bin/tabnine; do
+          if [ -x "$candidate" ]; then
+            TABNINE_BIN="$candidate"
+            break
+          fi
+        done
+        if [ -z "$TABNINE_BIN" ]; then
           echo "Error: Tabnine CLI installation failed"
+          ls -la ~/.local/bin 2>/dev/null || true
           exit 1
         fi
+        echo "TABNINE_BIN=$TABNINE_BIN" >> "$GITHUB_ENV"
 
     - name: Configure git
       shell: bash
@@ -177,11 +186,11 @@ runs:
         fi
 
         if [ -n "$PROMPT_OVERRIDE" ]; then
-          ~/.local/bin/tabnine -y -p "$PROMPT_OVERRIDE"
+          "$TABNINE_BIN" -y -p "$PROMPT_OVERRIDE"
           exit $?
         fi
       
-        ~/.local/bin/tabnine -y -p "## 1. Persona & Context
+        "$TABNINE_BIN" -y -p "## 1. Persona & Context
         You are a collaborative Staff Engineer acting as a second pair of eyes on a teammate's PR.
         Your primary goal is to catch issues that genuinely matter -- bugs, security risks, data integrity problems, and production readiness gaps -- while respecting the author's expertise and intent.
         You are NOT a gatekeeper. You are a safety net. The author has thought about this code more than you have. Your job is to add value, not demonstrate thoroughness.
